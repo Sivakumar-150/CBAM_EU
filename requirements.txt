@@ -1,6 +1,9 @@
-# Production-Ready Requirements - Minimal & Tested for Render
+# Production-Ready Requirements - Tested for Render
 # Python 3.11+
-# All packages have pre-built wheels - NO compilation needed
+
+# ============ BUILD TOOLS ============
+setuptools==68.0.0
+wheel==0.41.0
 
 # ============ CORE WEB FRAMEWORK ============
 Flask==3.0.0
