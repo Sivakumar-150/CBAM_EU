@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: cbam-industries-prediction
+    env: production
+    plan: starter
+    buildCommand: yarn install
+    startCommand: yarn start
+    regions:
+      - oregon
+    autoDeploy: true
