@@ -1,10 +1,6 @@
 services:
   - type: web
-    name: cbam-industries-prediction
-    env: production
-    plan: starter
-    buildCommand: yarn install
-    startCommand: yarn start
-    regions:
-      - oregon
-    autoDeploy: true
+    name: cbam-app
+    runtime: python-3.10
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
