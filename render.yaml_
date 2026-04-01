@@ -3,6 +3,8 @@ services:
     name: cbam-industries-prediction
     env: python
     plan: starter
+    runtime: python
+    pythonVersion: "3.11.8"
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
     regions:
@@ -11,5 +13,4 @@ services:
     envVars:
       - key: FLASK_ENV
         value: production
-      - key: PYTHON_VERSION
-        value: 3.11.8
+ 
