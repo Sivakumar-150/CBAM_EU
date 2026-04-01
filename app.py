@@ -69,10 +69,16 @@ try:
     except Exception as e:
         print(f"⚠️  Model info load failed: {e}")
         model_info = {
-            'r2_test': 0.85,
+            'r2_test': 0.80,
             'rmse_test': 15000,
             'categorical': ['country_of_origin', 'product_category', 'production_method'],
-            'numerical': ['quantity_tonnes', 'direct_emissions_tco2', 'indirect_emissions_tco2']
+            'numerical': [
+                'quantity_tonnes', 'direct_emissions_tco2', 'indirect_emissions_tco2',
+                'embedded_emissions_tco2', 'eu_ets_price_eur', 'carbon_price_origin_eur',
+                'total_emissions_tco2', 'emission_intensity', 'carbon_price_gap',
+                'cost_per_tonne', 'emission_ratio', 'price_ratio', 'emission_to_quantity',
+                'high_emission_flag', 'high_price_gap_flag', 'log_quantity', 'log_emissions'
+            ]
         }
 
     # Load dataset
@@ -82,7 +88,6 @@ try:
         MODEL_LOADED = True
     except Exception as e:
         print(f"⚠️  Dataset load failed: {e}")
-        # Create dummy dataset if CSV missing
         df = pd.DataFrame({
             'country_of_origin': ['CHN', 'IND', 'TUR', 'RUS', 'EGY'],
             'net_cbam_liability_eur': [49126, 72320, 11928, 48511, 0]
@@ -126,23 +131,62 @@ def get_cluster_info(emissions_intensity, liability):
 
 
 def prepare_prediction_data(form_data):
-    """Convert form data to model input"""
+    """
+    Convert form data to model input.
+    IMPORTANT: Must replicate the exact same feature engineering
+    used in train_model.py (Step 3).
+    """
+    # --- Raw inputs ---
+    quantity_tonnes         = float(form_data.get('quantity', 450))
+    direct_emissions_tco2   = float(form_data.get('direct_emissions', 1089))
+    indirect_emissions_tco2 = float(form_data.get('indirect_emissions', 156))
+    embedded_emissions_tco2 = float(form_data.get('embedded_emissions', 2.77))
+    eu_ets_price_eur        = float(form_data.get('eu_ets_price', 85))
+    carbon_price_origin_eur = float(form_data.get('carbon_price_origin', 0))
+    total_emissions_tco2    = direct_emissions_tco2 + indirect_emissions_tco2
+
+    # --- Engineered features (must match train_model.py exactly) ---
+    qty_safe = max(quantity_tonnes, 1)
+
+    emission_intensity   = embedded_emissions_tco2 / qty_safe
+    carbon_price_gap     = eu_ets_price_eur - carbon_price_origin_eur
+    total_emissions      = total_emissions_tco2          # alias used below
+    cost_per_tonne_val   = float(form_data.get('cbam_cert', 49127)) / qty_safe
+    emission_ratio       = direct_emissions_tco2 / (total_emissions + 1)
+    price_ratio          = carbon_price_origin_eur / (eu_ets_price_eur + 1)
+    emission_to_quantity = total_emissions / qty_safe
+    log_quantity         = np.log1p(quantity_tonnes)
+    log_emissions        = np.log1p(total_emissions)
+
+    # Flag features — we can't know global quantiles at serve time, so use
+    # sensible hard-coded thresholds derived from training data inspection.
+    # (high emission > 75th pct ≈ 5000 tCO2; high price gap > 75th pct ≈ 60 EUR)
+    high_emission_flag   = int(total_emissions > 5000)
+    high_price_gap_flag  = int(carbon_price_gap > 60)
+
     return {
-        'country_of_origin': form_data.get('country'),
-        'product_category': form_data.get('category'),
-        'production_method': form_data.get('method'),
-        'quantity_tonnes': float(form_data.get('quantity', 450)),
-        'direct_emissions_tco2': float(form_data.get('direct_emissions', 1089)),
-        'indirect_emissions_tco2': float(form_data.get('indirect_emissions', 156)),
-        'embedded_emissions_tco2': float(form_data.get('embedded_emissions', 2.77)),
-        'eu_benchmark_tco2': float(form_data.get('eu_benchmark', 1.5)),
-        'emissions_above_benchmark': float(form_data.get('above_benchmark', 577)),
-        'carbon_price_origin_eur': float(form_data.get('carbon_price_origin', 0)),
-        'eu_ets_price_eur': float(form_data.get('eu_ets_price', 85)),
-        'cbam_certificate_cost_eur': float(form_data.get('cbam_cert', 49127)),
-        'origin_carbon_credit_eur': float(form_data.get('origin_credit', 0)),
-        'total_emissions_tco2': float(form_data.get('direct_emissions', 1089)) + float(
-            form_data.get('indirect_emissions', 156)),
+        # --- Categorical ---
+        'country_of_origin':   form_data.get('country', 'CHN'),
+        'product_category':    form_data.get('category', 'iron_steel'),
+        'production_method':   form_data.get('method', 'blast_furnace'),
+        # --- Numerical (exact order used in training) ---
+        'quantity_tonnes':          quantity_tonnes,
+        'direct_emissions_tco2':    direct_emissions_tco2,
+        'indirect_emissions_tco2':  indirect_emissions_tco2,
+        'embedded_emissions_tco2':  embedded_emissions_tco2,
+        'eu_ets_price_eur':         eu_ets_price_eur,
+        'carbon_price_origin_eur':  carbon_price_origin_eur,
+        'total_emissions_tco2':     total_emissions_tco2,
+        'emission_intensity':       emission_intensity,
+        'carbon_price_gap':         carbon_price_gap,
+        'cost_per_tonne':           cost_per_tonne_val,
+        'emission_ratio':           emission_ratio,
+        'price_ratio':              price_ratio,
+        'emission_to_quantity':     emission_to_quantity,
+        'high_emission_flag':       high_emission_flag,
+        'high_price_gap_flag':      high_price_gap_flag,
+        'log_quantity':             log_quantity,
+        'log_emissions':            log_emissions,
     }
 
 
@@ -157,7 +201,7 @@ def home():
 
     try:
         stats = {
-            'r2_score': model_info.get('r2_test', 0.85),
+            'r2_score': model_info.get('r2_test', 0.80),
             'rmse': model_info.get('rmse_test', 15000),
             'n_samples': len(df),
             'avg_liability': float(df['net_cbam_liability_eur'].mean()) if 'net_cbam_liability_eur' in df.columns else 0,
@@ -196,23 +240,30 @@ def predict():
 
         data = request.json
 
-        # Prepare input
+        # Build fully-engineered feature row
         pred_data = prepare_prediction_data(data)
 
-        # Create DataFrame with correct column order
-        input_df = pd.DataFrame([pred_data])
+        # Separate into categorical + numerical in the order the model expects
+        categorical_cols = model_info.get('categorical', ['country_of_origin', 'product_category', 'production_method'])
+        numerical_cols   = model_info.get('numerical', [])
+        ordered_cols     = categorical_cols + numerical_cols
+
+        input_df = pd.DataFrame([pred_data])[ordered_cols]
 
         # Make prediction
         try:
-            liability_pred = model.predict(input_df)[0]
+            liability_pred = float(model.predict(input_df)[0])
         except Exception as e:
             print(f"⚠️  Prediction failed: {e}")
-            # Return fallback prediction
-            liability_pred = 50000.0
+            traceback.print_exc()
+            return jsonify({'success': False, 'error': f'Prediction error: {str(e)}'}), 500
 
-        # Calculate metrics
-        emissions_intensity = pred_data['total_emissions_tco2'] / max(pred_data['quantity_tonnes'], 1)
-        risk = get_risk_level(liability_pred)
+        # Calculate display metrics
+        quantity        = float(pred_data['quantity_tonnes'])
+        total_emissions = float(pred_data['total_emissions_tco2'])
+        emissions_intensity = total_emissions / max(quantity, 1)
+
+        risk    = get_risk_level(liability_pred)
         cluster = get_cluster_info(emissions_intensity, liability_pred)
 
         return jsonify({
@@ -221,7 +272,7 @@ def predict():
             'risk': risk,
             'cluster': cluster,
             'emissions_intensity': round(emissions_intensity, 4),
-            'cost_per_tonne': round(liability_pred / max(pred_data['quantity_tonnes'], 1), 2),
+            'cost_per_tonne': round(liability_pred / max(quantity, 1), 2),
             'recommendations': [
                 f"💡 Implement renewable energy to reduce direct emissions",
                 f"📊 Current emissions intensity: {emissions_intensity:.4f} tCO₂/t",
@@ -277,9 +328,8 @@ def find_similar():
 
         data = request.json
         category = data.get('category')
-        country = data.get('country')
+        country  = data.get('country')
 
-        # Filter similar records
         similar = df[
             (df['product_category'] == category) &
             (df['country_of_origin'] == country)
